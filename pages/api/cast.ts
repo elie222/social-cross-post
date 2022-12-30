@@ -1,23 +1,51 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { MerkleAPIClient, publishCast } from "@standard-crypto/farcaster-js";
-import { Wallet } from "ethers";
+import { TwitterApi } from "twitter-api-v2";
+import { MerkleAPIClient } from "@standard-crypto/farcaster-js";
 
-const MNEMONIC = process.env.MNEMONIC;
+const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN;
+const FC_SECRET = process.env.FC_SECRET;
+const FC_SECRET_EXPIRES = process.env.FC_SECRET_EXPIRES;
 
-// fetch the bearer token and log it
-// http://localhost:3000/api/twitter
+// http://localhost:3000/api/cast
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<any>
 ) {
-  if (!MNEMONIC) throw new Error("No mnemonic found in env vars");
-  const wallet = Wallet.fromMnemonic(MNEMONIC);
+  if (!TWITTER_BEARER_TOKEN)
+    throw new Error("No Twitter Bearer Token found in env vars");
+  if (!FC_SECRET) throw new Error("No FC_SECRET found in env vars");
+  if (!FC_SECRET_EXPIRES)
+    throw new Error("No FC_SECRET_EXPIRES found in env vars");
 
-  const client = new MerkleAPIClient(wallet);
+  const appOnlyClient = new TwitterApi(TWITTER_BEARER_TOKEN);
 
-  const EXPIRY_DURATION_MS = 31536000000; // 1 year
-  const bearerToken = await client.createAuthToken(EXPIRY_DURATION_MS);
-  console.log(bearerToken);
+  const timeline = await appOnlyClient.v2.userTimeline("158899715", {
+    max_results: 5,
+    since_id: "1602833256239755265",
+    "tweet.fields": ["in_reply_to_user_id", "referenced_tweets"],
+  });
 
-  res.status(200).json({ sucess: 'See server logs for bearer token' });
+  for await (const tweet of timeline) {
+    console.log(JSON.stringify(tweet, null, 2));
+    // can also just ignore all referenced tweets
+    if (
+      !tweet.in_reply_to_user_id &&
+      !tweet.referenced_tweets?.find(
+        (t) => t.type === "retweeted" || t.type === "quoted"
+      )
+    ) {
+      const apiClient = new MerkleAPIClient({
+        secret: FC_SECRET,
+        expiresAt: parseInt(FC_SECRET_EXPIRES),
+      });
+
+      const message = tweet.text;
+
+      apiClient.publishCast(message);
+
+      return res.status(200).json({ message });
+    }
+  }
+
+  res.status(200).json({ status: "no tweet found" });
 }
